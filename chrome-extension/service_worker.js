@@ -960,6 +960,45 @@ async function groupTab(tab, title, color) {
   return { tab: await formatTab(grouped), group: await groupRecord(groupId) };
 }
 
+let agentWindowId = null;
+let tabCreationQueue = Promise.resolve();
+
+async function createAgentTab(params) {
+  const optOut = (params.groupTitle === "" || params.group === false) && !params.groupColor;
+  const title = cleanGroupTitle(params.groupTitle);
+  const foreground = params.foreground === true;
+  const active = params.active ?? foreground;
+  let group = null;
+  if (!optOut && chrome.tabGroups) {
+    const groups = await chrome.tabGroups.query({});
+    group = groups.filter(g => (g.title || "").trim().toLowerCase() === title.toLowerCase() &&
+      (params.windowId == null || g.windowId === params.windowId))
+      .sort((a, b) => a.windowId - b.windowId || a.id - b.id)[0] || null;
+  }
+  let windowId = params.windowId ?? group?.windowId;
+  if (windowId == null && agentWindowId != null) {
+    const win = await chrome.windows.get(agentWindowId).catch(() => null);
+    if (win) windowId = win.id;
+    else agentWindowId = null;
+  }
+  let tab;
+  if (windowId == null) {
+    const win = await chrome.windows.create({ url: params.url || "about:blank", focused: foreground });
+    agentWindowId = win.id;
+    tab = win.tabs?.[0];
+    if (!tab) throw new Error("New agent window did not return a tab");
+  } else {
+    tab = await chrome.tabs.create({ windowId, url: params.url || "about:blank", active });
+    if (foreground) await chrome.windows.update(windowId, { focused: true });
+  }
+  if (optOut) return formatTab(tab);
+  if (group) {
+    await chrome.tabs.group({ groupId: group.id, tabIds: [tab.id] });
+    tab = await chrome.tabs.get(tab.id);
+  }
+  return groupTab(tab, title, params.groupColor);
+}
+
 async function dispatch(action, params) {
   switch (action) {
     case "tab.version":
@@ -974,11 +1013,9 @@ async function dispatch(action, params) {
       return Promise.all(tabs.map(formatTab));
     }
     case "tab.new": {
-      const tab = await chrome.tabs.create({ url: params.url || "about:blank", active: true });
-      // Every Hermes-opened tab joins a group by default. Pass groupTitle:"" (or group:false) to opt out.
-      const optOut = params.groupTitle === "" || params.group === false;
-      if (optOut && !params.groupColor) return formatTab(tab);
-      return groupTab(tab, params.groupTitle || "Hermes", params.groupColor);
+      const pending = tabCreationQueue.then(() => createAgentTab(params));
+      tabCreationQueue = pending.catch(() => {});
+      return pending;
     }
     case "tab.activate": {
       const tab = await getTabByParams(params);

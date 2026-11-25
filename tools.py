@@ -111,7 +111,8 @@ def register_all_tools(ctx, bridge: ChromeProfileBridge, auth: ChromeAuth) -> No
         ctx.register_tool(
             name=name,
             toolset="hermes-chrome-plugin",
-            schema={"type": "object", "properties": properties, "required": required or []},
+            schema={"name": name, "description": description, "parameters": {"type": "object", "properties": properties, "required": required or []}},
+            description=description,
             handler=_guard(handler),
             check_fn=auth.is_authorized,
             emoji=emoji,
@@ -151,7 +152,7 @@ def register_all_tools(ctx, bridge: ChromeProfileBridge, auth: ChromeAuth) -> No
     # -- chrome_tab --------------------------------------------------------
     def h_tab(args: dict) -> str:
         action = args.get("action")
-        forwarded = _clean(args)
+        forwarded = _wire(bridge, args) if action == "new" else _clean(args)
         if action in ("new", "group") and forwarded.get("groupTitle") is None and args.get("group") is not False:
             forwarded["groupTitle"] = "Hermes"
         result = _send(auth, bridge, f"tab.{action}", forwarded)
@@ -171,6 +172,9 @@ def register_all_tools(ctx, bridge: ChromeProfileBridge, auth: ChromeAuth) -> No
         {
             "action": {"type": "string", "enum": _TAB_ACTIONS},
             "url": {"type": "string", "description": "URL for action=new."},
+            "windowId": {"type": "integer", "description": "Optional target Chrome window ID for action=new."},
+            "active": {"type": "boolean", "description": "Activate the new tab within its window; defaults to foreground mode."},
+            **_bg_prop(),
             "targetId": {"type": "string", "description": "Chrome tab id for activate/close/group/ungroup."},
             "urlIncludes": {"type": "string", "description": "Match the target tab by URL substring."},
             "titleIncludes": {"type": "string", "description": "Match the target tab by title substring."},
